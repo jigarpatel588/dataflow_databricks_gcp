@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# GCS to Databricks Pipeline Runner Script
+# GCS to Databricks Spark Pipeline Runner Script
 # Make sure to update the configuration parameters before running
 
 # Configuration - Update these values
@@ -12,24 +12,41 @@ DATABRICKS_TOKEN="your-databricks-access-token"
 DATABRICKS_DATABASE="default"
 DATABRICKS_TABLE="products"
 TEMP_LOCATION="gs://your-gcp-project-id/temp"
-STAGING_LOCATION="gs://your-gcp-project-id/staging"
+BIGQUERY_DATASET="temp_dataset"
+BIGQUERY_TABLE="temp_products"
+
+# Spark Configuration
+SPARK_MASTER="local[*]"  # Use local[*] for local testing, or set to cluster URL for production
+SPARK_DRIVER_MEMORY="2g"
+SPARK_EXECUTOR_MEMORY="2g"
+SPARK_EXECUTOR_CORES="2"
 
 # Build the project
 echo "Building the project..."
 mvn clean compile package
 
-# Run the pipeline
-echo "Running GCS to Databricks pipeline..."
-mvn exec:java -Dexec.mainClass="com.example.GcsToDatabricksPipeline" \
-  -Dexec.args="--project=$PROJECT_ID \
-  --inputFile=$INPUT_FILE \
-  --databricksHost=$DATABRICKS_HOST \
-  --databricksHttpPath=$DATABRICKS_HTTP_PATH \
-  --databricksToken=$DATABRICKS_TOKEN \
-  --databricksDatabase=$DATABRICKS_DATABASE \
-  --databricksTable=$DATABRICKS_TABLE \
-  --tempLocation=$TEMP_LOCATION \
-  --stagingLocation=$STAGING_LOCATION \
-  --runner=SparkRunner"
+# Check if build was successful
+if [ $? -ne 0 ]; then
+    echo "Build failed. Exiting."
+    exit 1
+fi
 
-echo "Pipeline execution completed!"
+# Run the Spark pipeline
+echo "Running GCS to Databricks Spark pipeline..."
+mvn exec:java -Dexec.mainClass="com.example.GcsToDatabricksSparkPipeline" \
+  -Dexec.args="$PROJECT_ID \
+  $INPUT_FILE \
+  $BIGQUERY_DATASET \
+  $BIGQUERY_TABLE \
+  $DATABRICKS_HOST \
+  $DATABRICKS_HTTP_PATH \
+  $DATABRICKS_TOKEN \
+  $DATABRICKS_DATABASE \
+  $DATABRICKS_TABLE \
+  $TEMP_LOCATION" \
+  -Dspark.master="$SPARK_MASTER" \
+  -Dspark.driver.memory="$SPARK_DRIVER_MEMORY" \
+  -Dspark.executor.memory="$SPARK_EXECUTOR_MEMORY" \
+  -Dspark.executor.cores="$SPARK_EXECUTOR_CORES"
+
+echo "Spark pipeline execution completed!"

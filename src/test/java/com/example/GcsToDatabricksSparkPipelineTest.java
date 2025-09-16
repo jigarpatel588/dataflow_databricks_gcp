@@ -22,7 +22,6 @@ import static org.junit.Assert.*;
 
 import org.apache.spark.sql.*;
 import org.apache.spark.sql.types.*;
-import org.apache.spark.sql.functions.*;
 import org.apache.spark.SparkConf;
 
 import java.util.Arrays;

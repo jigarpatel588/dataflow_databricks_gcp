@@ -1,12 +1,12 @@
 # GCS to Databricks Pipeline
 
-A Google Cloud Dataflow pipeline that demonstrates how to load CSV data from Google Cloud Storage (GCS) into Databricks using Apache Beam with Java Spark integration.
+A native Apache Spark pipeline that demonstrates how to load CSV data from Google Cloud Storage (GCS) into Databricks using Spark's native Java APIs.
 
 ## Overview
 
 This project provides a complete solution for:
-- Reading CSV data from Google Cloud Storage
-- Processing and validating data using Apache Beam
+- Reading CSV data from Google Cloud Storage using Spark
+- Processing and validating data using Spark SQL and DataFrame APIs
 - Storing data temporarily in BigQuery for reliability
 - Loading processed data into Databricks using JDBC connectivity
 - Running on Apache Spark for distributed processing
@@ -14,12 +14,12 @@ This project provides a complete solution for:
 ## Architecture
 
 ```
-GCS (CSV Files) → Apache Beam Pipeline → BigQuery (Intermediate) → Databricks
+GCS (CSV Files) → Spark Pipeline → BigQuery (Intermediate) → Databricks
 ```
 
 ### Data Flow
-1. **Extract**: Read CSV files from Google Cloud Storage
-2. **Transform**: Parse, validate, and clean data using Apache Beam transforms
+1. **Extract**: Read CSV files from Google Cloud Storage using Spark
+2. **Transform**: Parse, validate, and clean data using Spark SQL and DataFrame operations
 3. **Load**: Store in BigQuery as intermediate storage for reliability
 4. **Transfer**: Read from BigQuery and load into Databricks via JDBC
 
@@ -28,6 +28,7 @@ GCS (CSV Files) → Apache Beam Pipeline → BigQuery (Intermediate) → Databri
 ### Software Requirements
 - Java 11 or higher
 - Maven 3.6 or higher
+- Apache Spark 3.4.1
 - Google Cloud SDK
 - Access to Google Cloud Platform
 - Databricks workspace with SQL warehouse
@@ -37,7 +38,6 @@ GCS (CSV Files) → Apache Beam Pipeline → BigQuery (Intermediate) → Databri
 2. Enable the following APIs:
    - Cloud Storage API
    - BigQuery API
-   - Dataflow API
 3. Create service account with appropriate permissions
 4. Set up authentication:
    ```bash
@@ -56,20 +56,20 @@ GCS (CSV Files) → Apache Beam Pipeline → BigQuery (Intermediate) → Databri
 gcs-to-databricks-pipeline/
 ├── src/
 │   ├── main/java/com/example/
-│   │   ├── GcsToDatabricksPipeline.java    # Main pipeline class
-│   │   ├── DatabricksConfig.java           # Databricks configuration
-│   │   └── DataTransforms.java             # Data transformation utilities
-│   └── test/java/com/example/              # Test classes
+│   │   ├── GcsToDatabricksSparkPipeline.java    # Main Spark pipeline class
+│   │   ├── SparkConfiguration.java              # Spark configuration management
+│   │   └── SparkDataTransforms.java             # Spark data transformation utilities
+│   └── test/java/com/example/                   # Test classes
 ├── data/
-│   └── products.csv                        # Sample CSV data
+│   └── products.csv                             # Sample CSV data
 ├── config/
-│   └── application.properties              # Configuration file
+│   └── application.properties                   # Configuration file
 ├── scripts/
-│   ├── create_databricks_table.sql         # SQL for table creation
-│   ├── run_pipeline.sh                     # Linux/Mac runner script
-│   └── run_pipeline.bat                    # Windows runner script
-├── pom.xml                                 # Maven configuration
-└── README.md                               # This file
+│   ├── create_databricks_table.sql              # SQL for table creation
+│   ├── run_pipeline.sh                          # Linux/Mac runner script
+│   └── run_pipeline.bat                         # Windows runner script
+├── pom.xml                                      # Maven configuration
+└── README.md                                    # This file
 ```
 
 ## Configuration
@@ -110,17 +110,17 @@ Run the SQL script in your Databricks workspace:
 ### Method 1: Command Line
 
 ```bash
-mvn compile exec:java -Dexec.mainClass="com.example.GcsToDatabricksPipeline" \
-  -Dexec.args="--project=your-gcp-project-id \
-  --inputFile=gs://your-gcp-project-id/data/products.csv \
-  --databricksHost=your-databricks-host.cloud.databricks.com \
-  --databricksHttpPath=/sql/1.0/warehouses/your-warehouse-id \
-  --databricksToken=your-databricks-access-token \
-  --databricksDatabase=default \
-  --databricksTable=products \
-  --tempLocation=gs://your-gcp-project-id/temp \
-  --stagingLocation=gs://your-gcp-project-id/staging \
-  --runner=SparkRunner"
+mvn compile exec:java -Dexec.mainClass="com.example.GcsToDatabricksSparkPipeline" \
+  -Dexec.args="your-gcp-project-id \
+  gs://your-gcp-project-id/data/products.csv \
+  temp_dataset \
+  temp_products \
+  your-databricks-host.cloud.databricks.com \
+  /sql/1.0/warehouses/your-warehouse-id \
+  your-databricks-access-token \
+  default \
+  products \
+  gs://your-gcp-project-id/temp"
 ```
 
 ### Method 2: Using Scripts
@@ -136,19 +136,15 @@ chmod +x scripts/run_pipeline.sh
 scripts\run_pipeline.bat
 ```
 
-### Method 3: Direct Runner (Local Testing)
+### Method 3: Using Configuration File
 
-For local testing without Spark:
-```bash
-mvn compile exec:java -Dexec.mainClass="com.example.GcsToDatabricksPipeline" \
-  -Dexec.args="--project=your-gcp-project-id \
-  --inputFile=gs://your-gcp-project-id/data/products.csv \
-  --databricksHost=your-databricks-host.cloud.databricks.com \
-  --databricksHttpPath=/sql/1.0/warehouses/your-warehouse-id \
-  --databricksToken=your-databricks-access-token \
-  --databricksDatabase=default \
-  --databricksTable=products \
-  --runner=DirectRunner"
+```java
+// Load configuration from properties file
+SparkConfiguration config = SparkConfiguration.fromPropertiesFile("config/application.properties");
+
+// Create and run pipeline
+GcsToDatabricksSparkPipeline pipeline = new GcsToDatabricksSparkPipeline(config);
+pipeline.runPipeline();
 ```
 
 ## Data Schema
@@ -183,6 +179,7 @@ P002,"Wireless Mouse",Electronics,29.99,200
 - Validates numeric fields (price, quantity)
 - Ensures non-negative values for price and quantity
 - Skips malformed records with logging
+- Advanced outlier detection and handling
 
 ### Error Handling
 - Comprehensive logging throughout the pipeline
@@ -192,9 +189,11 @@ P002,"Wireless Mouse",Electronics,29.99,200
 
 ### Performance Optimization
 - Uses BigQuery as intermediate storage for reliability
-- Parallel processing with Apache Beam
+- Parallel processing with Apache Spark
 - Optimized JDBC connections to Databricks
 - Efficient data transformations
+- Adaptive query execution
+- Memory optimization
 
 ## Monitoring and Logging
 
@@ -228,16 +227,16 @@ The pipeline provides detailed logging at each stage:
 
 Enable debug logging by setting:
 ```bash
-export BEAM_LOG_LEVEL=DEBUG
+export SPARK_LOG_LEVEL=DEBUG
 ```
 
 ## Dependencies
 
 ### Core Dependencies
-- Apache Beam 2.50.0
 - Apache Spark 3.4.1
 - Google Cloud Storage 2.20.0
 - Google Cloud BigQuery 2.20.0
+- Spark BigQuery Connector 0.36.1
 - Databricks JDBC Driver 2.6.25
 
 ### Build Dependencies
@@ -267,5 +266,7 @@ For issues and questions:
 
 ## Version History
 
-- **v1.0.0**: Initial release with basic GCS to Databricks pipeline
-- Features: CSV processing, BigQuery intermediate storage, Databricks JDBC integration
+- **v2.0.0**: Spark-based implementation
+  - Features: Native Spark APIs, DataFrame operations, UDFs, advanced data quality
+- **v1.0.0**: Apache Beam implementation
+  - Features: CSV processing, BigQuery intermediate storage, Databricks JDBC integration
