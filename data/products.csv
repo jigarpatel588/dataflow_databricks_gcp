@@ -1,0 +1,17 @@
+# Sample product data for GCS to Databricks pipeline
+# Format: id,product_name,category,price,quantity
+P001,"Laptop Computer 15-inch",Electronics,1299.99,50
+P002,"Wireless Mouse",Electronics,29.99,200
+P003,"Office Chair Ergonomic",Furniture,199.99,75
+P004,"Coffee Maker Deluxe",Appliances,89.99,30
+P005,"Programming Book Java",Books,49.99,100
+P006,"Monitor 27-inch 4K",Electronics,399.99,25
+P007,"Desk Lamp LED",Furniture,45.99,60
+P008,"Bluetooth Headphones",Electronics,79.99,80
+P009,"Kitchen Knife Set",Kitchen,59.99,40
+P010,"Yoga Mat Premium",Sports,34.99,90
+P011,"Smartphone Case",Electronics,19.99,150
+P012,"Notebook Spiral",Office,4.99,500
+P013,"Water Bottle Insulated",Sports,24.99,120
+P014,"Tablet 10-inch",Electronics,299.99,35
+P015,"Backpack Travel",Luggage,79.99,45
