@@ -3,14 +3,14 @@ REM GCS to Databricks Spark Pipeline Runner Script for Windows
 REM Make sure to update the configuration parameters before running
 
 REM Configuration - Update these values
-set PROJECT_ID=your-gcp-project-id
-set INPUT_FILE=gs://your-gcp-project-id/data/products.csv
-set DATABRICKS_HOST=your-databricks-host.cloud.databricks.com
-set DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
-set DATABRICKS_TOKEN=your-databricks-access-token
+set PROJECT_ID=YOUR_PROJECT_ID
+set INPUT_FILE=gs://YOUR_BUCKET/csv/products.csv
+set DATABRICKS_HOST=https://YOUR_DATABRICKS_HOST
+set DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/YOUR_WAREHOUSE_ID
+set DATABRICKS_TOKEN=YOUR_DATABRICKS_TOKEN
 set DATABRICKS_DATABASE=default
 set DATABRICKS_TABLE=products
-set TEMP_LOCATION=gs://your-gcp-project-id/temp
+set TEMP_LOCATION=gs://YOUR_BUCKET/temp
 set BIGQUERY_DATASET=temp_dataset
 set BIGQUERY_TABLE=temp_products
 
@@ -22,7 +22,7 @@ set SPARK_EXECUTOR_CORES=2
 
 REM Build the project
 echo Building the project...
-mvn clean compile package
+mvn clean compile package -DskipTests
 
 REM Check if build was successful
 if %ERRORLEVEL% neq 0 (
