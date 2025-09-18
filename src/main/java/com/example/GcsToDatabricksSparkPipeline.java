@@ -19,6 +19,12 @@ import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.types.*;
 import static org.apache.spark.sql.functions.*;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
 import org.apache.spark.SparkConf;
 
 import com.google.cloud.bigquery.*;
@@ -31,6 +37,7 @@ import com.google.cloud.bigquery.StandardSQLTypeName;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.google.cloud.storage.*;
 
 
 /**
@@ -142,8 +149,8 @@ public class GcsToDatabricksSparkPipeline {
             .filter(col("id").isNotNull().and(col("id").notEqual("")))
             .filter(col("product_name").isNotNull().and(col("product_name").notEqual("")))
             .filter(col("category").isNotNull().and(col("category").notEqual("")))
-            .filter(col("price").isNotNull().and(col("price").geq(0)))
-            .filter(col("quantity").isNotNull().and(col("quantity").geq(0)))
+            // .filter(col("price").isNotNull().and(col("price").geq(0)))
+            // .filter(col("quantity").isNotNull().and(col("quantity").geq(0)))
             .withColumn("id", trim(col("id")))
             .withColumn("product_name", trim(col("product_name")))
             .withColumn("category", trim(col("category")));
@@ -177,9 +184,13 @@ public class GcsToDatabricksSparkPipeline {
             TableId tableId = TableId.of(config.getProjectId(), 
                                        config.getBigQueryDataset(), 
                                        config.getBigQueryTable());
+
+            String fullTableId = config.getProjectId() + ":" + 
+                     config.getBigQueryDataset() + "." + 
+                     config.getBigQueryTable();
             
             // Create table schema
-            com.google.cloud.bigquery.Schema bigQuerySchema = com.google.cloud.bigquery.Schema.of(
+            Schema bigQuerySchema = Schema.of(
                 Field.of("id", StandardSQLTypeName.STRING),
                 Field.of("product_name", StandardSQLTypeName.STRING),
                 Field.of("category", StandardSQLTypeName.STRING),
@@ -193,13 +204,18 @@ public class GcsToDatabricksSparkPipeline {
                 .build();
             
             TableInfo tableInfo = TableInfo.newBuilder(tableId, tableDefinition).build();
-            bigQuery.create(tableInfo);
+            // bigQuery.create(tableInfo);
+            // This will create or replace the table
+            // bigQuery.create(tableInfo, BigQuery.Option.of("createDisposition", "CREATE_IF_NEEDED"));
+            // bigQuery.create(tableInfo, BigQuery.Option.of("writeDisposition", "WRITE_TRUNCATE"));
+
             LOG.info("BigQuery table created or already exists: {}", tableId);
             
             // Write data to BigQuery using Spark BigQuery connector
             data.write()
                 .format("bigquery")
-                .option("table", tableId.toString())
+                // .option("table", tableId.toString())
+                .option("table", fullTableId)
                 .option("temporaryGcsBucket", config.getTempLocation())
                 .option("writeMethod", "direct")
                 .mode(SaveMode.Overwrite)
@@ -249,6 +265,7 @@ public class GcsToDatabricksSparkPipeline {
                 col("quantity"),
                 col("processed_at")
             );
+
         
         LOG.info("Data prepared for Databricks with {} rows", databricksData.count());
         return databricksData;
@@ -264,16 +281,16 @@ public class GcsToDatabricksSparkPipeline {
             // Configure Databricks connection
             String jdbcUrl = createDatabricksJdbcUrl();
             
-            // Write to Databricks using JDBC
-            data.write()
-                .format("jdbc")
-                .option("url", jdbcUrl)
-                .option("dbtable", config.getDatabricksTable())
-                .option("driver", "com.databricks.client.jdbc.Driver")
-                .option("user", "token")
-                .option("password", config.getDatabricksToken())
-                .mode(SaveMode.Append)
-                .save();
+            // First, ensure the table exists with proper Databricks syntax
+            createDatabricksTableIfNotExists(jdbcUrl);
+            
+            // Write to Databricks using a two-step approach to avoid quoted identifier issues
+            try {
+                writeToDatabricksWithTempTable(data, jdbcUrl);
+            } catch (SQLException e) {
+                LOG.error("SQL error while writing to Databricks", e);
+                throw new RuntimeException("Databricks write failed due to SQL error", e);
+            }
             
             LOG.info("Successfully wrote {} rows to Databricks", data.count());
             
@@ -284,11 +301,179 @@ public class GcsToDatabricksSparkPipeline {
     }
     
     /**
+     * Creates the Databricks table if it doesn't exist using proper SQL syntax
+     */
+    private void createDatabricksTableIfNotExists(String jdbcUrl) {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "token", config.getDatabricksToken())) {
+            String createTableSql = String.format(
+                "CREATE TABLE IF NOT EXISTS %s (" +
+                "id STRING NOT NULL, " +
+                "product_name STRING NOT NULL, " +
+                "category STRING NOT NULL, " +
+                "price DOUBLE NOT NULL, " +
+                "quantity BIGINT NOT NULL, " +
+                "processed_at TIMESTAMP NOT NULL" +
+                ") USING DELTA " +
+                "TBLPROPERTIES (" +
+                "'delta.autoOptimize.optimizeWrite' = 'true', " +
+                "'delta.autoOptimize.autoCompact' = 'true'" +
+                ")",
+                config.getDatabricksTable()
+            );
+            
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(createTableSql);
+                LOG.info("Databricks table '{}' created or already exists", config.getDatabricksTable());
+            }
+        } catch (SQLException e) {
+            LOG.warn("Failed to create table (it might already exist): {}", e.getMessage());
+            // Continue execution as the table might already exist
+        }
+    }
+    
+    /**
+     * Writes data to Databricks using a temporary table approach to avoid quoted identifier issues
+     */
+    private void writeToDatabricksWithTempTable(Dataset<Row> data, String jdbcUrl) throws SQLException {
+        String tempTableName = config.getDatabricksTable() + "_temp_" + System.currentTimeMillis();
+        
+        try {
+            // Step 1: Create a temporary table with a simple name using direct SQL
+            createTempTable(jdbcUrl, tempTableName);
+            
+            // Step 2: Write data to the temporary table using direct SQL inserts
+            writeDataToTempTableUsingSQL(data, jdbcUrl, tempTableName);
+            
+            // Step 3: Copy data from temp table to main table using SQL
+            copyDataFromTempTable(jdbcUrl, tempTableName, config.getDatabricksTable());
+            
+            // Step 4: Drop the temporary table
+            dropTempTable(jdbcUrl, tempTableName);
+            
+            LOG.info("Successfully wrote data to Databricks using temporary table approach");
+            
+        } catch (SQLException e) {
+            // Clean up temp table if it exists
+            try {
+                dropTempTable(jdbcUrl, tempTableName);
+            } catch (SQLException cleanupException) {
+                LOG.warn("Failed to clean up temporary table: {}", cleanupException.getMessage());
+            }
+            throw e;
+        } catch (Exception e) {
+            // Clean up temp table if it exists
+            try {
+                dropTempTable(jdbcUrl, tempTableName);
+            } catch (SQLException cleanupException) {
+                LOG.warn("Failed to clean up temporary table: {}", cleanupException.getMessage());
+            }
+            throw new RuntimeException("Failed to write to Databricks using temporary table approach", e);
+        }
+    }
+    
+    /**
+     * Creates a temporary table with the same structure as the main table
+     */
+    private void createTempTable(String jdbcUrl, String tempTableName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "token", config.getDatabricksToken())) {
+            String createTempTableSql = String.format(
+                "CREATE TABLE %s (" +
+                "id STRING NOT NULL, " +
+                "product_name STRING NOT NULL, " +
+                "category STRING NOT NULL, " +
+                "price DOUBLE NOT NULL, " +
+                "quantity BIGINT NOT NULL, " +
+                "processed_at TIMESTAMP NOT NULL" +
+                ") USING DELTA",
+                tempTableName
+            );
+            
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(createTempTableSql);
+                LOG.info("Created temporary table: {}", tempTableName);
+            }
+        }
+    }
+    
+    /**
+     * Writes data to temporary table using direct SQL inserts to avoid quoted identifier issues
+     */
+    private void writeDataToTempTableUsingSQL(Dataset<Row> data, String jdbcUrl, String tempTableName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "token", config.getDatabricksToken())) {
+            // Collect data to driver for individual inserts
+            Row[] rows = (Row[]) data.collect();
+            
+            if (rows.length == 0) {
+                LOG.info("No data to insert into temporary table");
+                return;
+            }
+            
+            // Prepare individual insert statement
+            String insertSql = String.format(
+                "INSERT INTO %s (id, product_name, category, price, quantity, processed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                tempTableName
+            );
+            
+            try (PreparedStatement statement = connection.prepareStatement(insertSql)) {
+                int insertedCount = 0;
+                
+                for (Row row : rows) {
+                    statement.setString(1, row.getString(0)); // id
+                    statement.setString(2, row.getString(1)); // product_name
+                    statement.setString(3, row.getString(2)); // category
+                    statement.setDouble(4, row.getDouble(3)); // price
+                    statement.setLong(5, row.getLong(4)); // quantity
+                    statement.setTimestamp(6, row.getTimestamp(5)); // processed_at
+                    
+                    int result = statement.executeUpdate();
+                    insertedCount += result;
+                }
+                
+                LOG.info("Inserted {} rows into temporary table {}", insertedCount, tempTableName);
+            }
+        }
+    }
+    
+    /**
+     * Copies data from temporary table to main table using SQL
+     */
+    private void copyDataFromTempTable(String jdbcUrl, String tempTableName, String mainTableName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "token", config.getDatabricksToken())) {
+            String copyDataSql = String.format(
+                "INSERT INTO %s " +
+                "SELECT id, product_name, category, price, quantity, processed_at " +
+                "FROM %s",
+                mainTableName,
+                tempTableName
+            );
+            
+            try (Statement statement = connection.createStatement()) {
+                int rowsInserted = statement.executeUpdate(copyDataSql);
+                LOG.info("Copied {} rows from {} to {}", rowsInserted, tempTableName, mainTableName);
+            }
+        }
+    }
+    
+    /**
+     * Drops the temporary table
+     */
+    private void dropTempTable(String jdbcUrl, String tempTableName) throws SQLException {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "token", config.getDatabricksToken())) {
+            String dropTableSql = "DROP TABLE IF EXISTS " + tempTableName;
+            
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(dropTableSql);
+                LOG.info("Dropped temporary table: {}", tempTableName);
+            }
+        }
+    }
+    
+    /**
      * Creates JDBC URL for Databricks connection
      */
     private String createDatabricksJdbcUrl() {
         String jdbcUrl = String.format(
-            "jdbc:spark://%s:443/%s;transportMode=http;ssl=1;httpPath=%s;AuthMech=3;UID=token;PWD=%s",
+            "jdbc:databricks://%s:443/%s;transportMode=http;ssl=1;httpPath=%s;AuthMech=3;UID=token;PWD=%s;UseNativeQuery=1",
             config.getDatabricksHost(),
             config.getDatabricksDatabase(),
             config.getDatabricksHttpPath(),

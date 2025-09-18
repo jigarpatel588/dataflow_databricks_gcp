@@ -51,8 +51,10 @@ public class SparkConfiguration {
     
     private SparkConfiguration(Builder builder) {
         this.projectId = builder.projectId;
-        this.inputFile = builder.inputFile;
-        this.tempLocation = builder.tempLocation;
+        // this.inputFile = builder.inputFile;
+        this.inputFile = "gs://totemic-program-472221-f0-data-operation/csv/products.csv";
+        // this.tempLocation = builder.tempLocation;
+        this.tempLocation = "gs://totemic-program-472221-f0-data-operation/temp";
         this.stagingLocation = builder.stagingLocation;
         this.bigQueryDataset = builder.bigQueryDataset;
         this.bigQueryTable = builder.bigQueryTable;
@@ -92,7 +94,7 @@ public class SparkConfiguration {
             .setDatabricksTable(props.getProperty("databricks.table"))
             .setJobName(props.getProperty("pipeline.job.name", "gcs-to-databricks-spark-pipeline"))
             .setParallelism(Integer.parseInt(props.getProperty("pipeline.parallelism", "4")))
-            .setLoggingLevel(props.getProperty("logging.level", "INFO"))
+            .setLoggingLevel(props.getProperty("logging.level", "INFO"))            
             .build();
     }
     
